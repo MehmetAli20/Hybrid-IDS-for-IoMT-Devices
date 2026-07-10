@@ -62,17 +62,9 @@ The pipeline supports three granularities via `--class_config`:
 | `6`  | Benign, DDoS, DoS, MQTT, Recon, Spoofing | attack-family triage |
 | `19` | benign + all 18 subtypes | fine-grained forensics |
 
-## Results
+## Evaluation
 
-<!-- TODO: fill in from the final training run (classification_report console output) -->
-
-| Mode | Accuracy | Macro F1 | Notes |
-|---|---|---|---|
-| Binary (2-class) | XX.X% | XX.X% | |
-| 6-class | XX.X% | XX.X% | |
-| 19-class | XX.X% | XX.X% | |
-
-Per-class evaluation artifacts are generated for every run and included in [`src/`](src/):
+Every run produces a full set of per-class evaluation artifacts (included in [`src/`](src/)):
 
 - Normalized **confusion matrix** — [`confusion_matrix.png`](src/confusion_matrix.png)
 - **Per-class ROC curves** with AUC — `roc_curve_*.png`
