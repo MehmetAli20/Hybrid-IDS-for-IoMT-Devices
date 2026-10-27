@@ -1,15 +1,13 @@
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler, RobustScaler
-from sklearn.model_selection import train_test_split
-from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold
-from tensorflow.keras import layers, models
-import numpy as np
 import os
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler, FunctionTransformer, QuantileTransformer
+from sklearn.pipeline import make_pipeline
 from imblearn.over_sampling import SMOTE
-from tensorflow.keras.utils import to_categorical
 
-# Define attack categories
-ATTACK_CATEGORIES_19 = { 
+# Dosya adındaki anahtar -> 19 sınıflı etiket
+ATTACK_CATEGORIES_19 = {
     'ARP_Spoofing': 'Spoofing',
     'MQTT-DDoS-Connect_Flood': 'MQTT-DDoS-Connect_Flood',
     'MQTT-DDoS-Publish_Flood': 'MQTT-DDoS-Publish_Flood',
@@ -31,7 +29,8 @@ ATTACK_CATEGORIES_19 = {
     'Benign': 'Benign'
 }
 
-ATTACK_CATEGORIES_6 = {  
+# 19 sınıflı etiket -> 6 sınıflı saldırı ailesi
+ATTACK_CATEGORIES_6 = {
     'Spoofing': 'Spoofing',
     'MQTT-DDoS-Connect_Flood': 'MQTT',
     'MQTT-DDoS-Publish_Flood': 'MQTT',
@@ -53,198 +52,153 @@ ATTACK_CATEGORIES_6 = {
     'Benign': 'Benign'
 }
 
-ATTACK_CATEGORIES_2 = {  
-    'ARP_Spoofing': 'attack',
-    'MQTT-DDoS-Connect_Flood': 'attack',
-    'MQTT-DDoS-Publish_Flood': 'attack',
-    'MQTT-DoS-Connect_Flood': 'attack',
-    'MQTT-DoS-Publish_Flood': 'attack',
-    'MQTT-Malformed_Data': 'attack',
-    'Recon-OS_Scan': 'attack',
-    'Recon-Ping_Sweep': 'attack',
-    'Recon-Port_Scan': 'attack',
-    'Recon-VulScan': 'attack',
-    'TCP_IP-DDoS-ICMP': 'attack',
-    'TCP_IP-DDoS-SYN': 'attack',
-    'TCP_IP-DDoS-TCP': 'attack',
-    'TCP_IP-DDoS-UDP': 'attack',
-    'TCP_IP-DoS-ICMP': 'attack',
-    'TCP_IP-DoS-SYN': 'attack',
-    'TCP_IP-DoS-TCP': 'attack',
-    'TCP_IP-DoS-UDP': 'attack',
-    'Benign': 'Benign'
-}
 
-def build_autoencoder(input_dim, encoding_dim=32):
-    input_layer = layers.Input(shape=(input_dim,))
-    encoded = layers.Dense(128, activation='relu')(input_layer)
-    encoded = layers.Dense(encoding_dim, activation='relu')(encoded)
-    decoded = layers.Dense(128, activation='relu')(encoded)
-    decoded = layers.Dense(input_dim, activation='linear')(decoded)
-    autoencoder = models.Model(inputs=input_layer, outputs=decoded)
-    encoder = models.Model(inputs=input_layer, outputs=encoded)
-    autoencoder.compile(optimizer='adam', loss='mse')
-    return autoencoder, encoder
-
-def get_attack_category(file_name, class_config): 
-    """Get attack category from file name."""
-
-    if class_config == 2:
-        categories = ATTACK_CATEGORIES_2
-    elif class_config == 6:
-        categories = ATTACK_CATEGORIES_6
-    else:  # Default to 19 classes 
-        categories = ATTACK_CATEGORIES_19  
-
-    for key in categories:
+def get_attack_category(file_name):
+    for key in ATTACK_CATEGORIES_19:
         if key in file_name:
-            return categories[key]
-        
-def balance_dataset(df, target_column, n_samples=None):
-    """
-    Her sınıftan eşit sayıda örnek alarak veri setini dengeler.
-    n_samples belirtilmezse en az örneğe sahip sınıftaki örnek sayısı kullanılır.
-    """
-    # Her sınıftaki örnek sayısını say
-    class_counts = df[target_column].value_counts()
-    
-    # Eğer n_samples belirtilmemişse, en az örneğe sahip sınıfın örnek sayısını kullan
-    if n_samples is None:
-        n_samples = class_counts.min()
-    
-    # Her sınıftan n_samples kadar rastgele örnek al
-    balanced_dfs = []
-    for class_label in class_counts.index:
-        class_df = df[df[target_column] == class_label]
-        sampled_df = class_df.sample(n=min(n_samples, len(class_df)), random_state=42)
-        balanced_dfs.append(sampled_df)
-    
-    # Tüm örnekleri birleştir
-    balanced_df = pd.concat(balanced_dfs, axis=0)
-    
-    # Verileri karıştır
-    return balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
+            return ATTACK_CATEGORIES_19[key]
+    raise ValueError(f"Dosya adından etiket çıkarılamadı: {file_name}")
 
-def load_and_preprocess_data(data_dir, class_config=2, max_samples=100000, encoding_dim=32, ae_epochs=30, ae_batch_size=256):
-    """
-    Veri setini yükler, dengeler ve ön işleme yapar.
-    """
-    print("📝 Veri yükleme işlemi başlatı...")
-    
-    # Tüm CSV dosyalarını birleştir
-    all_files = []
-    for filename in os.listdir(os.path.join(data_dir, 'train')):
-        if filename.endswith('.csv'):
-            file_path = os.path.join(data_dir, 'train', filename)
-            df = pd.read_csv(file_path)
-            
-            # Dosya adından saldırı türünü belirle
-            attack_type = get_attack_category(filename, class_config)
-            
-            # Etiket sütunu ekle
-            df['label'] = attack_type
-            
-            # Temel temizlik
-            df = df.drop_duplicates()
-            df = df.dropna()
-            
-            all_files.append(df)
-            print(f"  ✓ {filename} yüklendi: {len(df)} kayıt")
-    
-    # Tüm verileri tek bir DataFrame'de birleştir
-    combined_df = pd.concat(all_files, axis=0, ignore_index=True)
-    print(f"📊 Toplam veri sayısı: {len(combined_df)}")
-    
-    # Sınıf yapılandırmasına göre etiketleri ayarla
+
+def map_labels(labels_19, class_config):
+    labels_19 = np.asarray(labels_19, dtype=object)
     if class_config == 2:
-        combined_df['label'] = combined_df['label'].apply(lambda x: 'Attack' if x != 'Benign' else 'Benign')
-    elif class_config == 6:
-        combined_df['label'] = combined_df['label'].apply(lambda x: ATTACK_CATEGORIES_6.get(x, x))
-    
-    # Veri dengesizliğini kontrol et ve raporla
-    class_distribution = combined_df['label'].value_counts()
-    print("\n📊 Sınıf dağılımı:")
-    for label, count in class_distribution.items():
-        print(f"  • {label}: {count} ({count/len(combined_df)*100:.1f}%)")
-    
-    # En az örneğe sahip sınıfı bul
-    min_samples = class_distribution.min()
-    print(f"\n📊 En az örneğe sahip sınıf sayısı: {min_samples}")
-    
-    # Her sınıftan rastgele örnekleme yap
-    balanced_dfs = []
-    for label in combined_df['label'].unique():
-        class_df = combined_df[combined_df['label'] == label]
-        if len(class_df) > min_samples:
-            # Eğer sınıfta yeterli örnek varsa, min_samples kadar örnek al
-            sampled_df = class_df.sample(n=min_samples, random_state=42)
-        else:
-            # Eğer sınıfta yeterli örnek yoksa, mevcut örnekleri tekrarla
-            n_repeats = min_samples // len(class_df) + 1
-            sampled_df = pd.concat([class_df] * n_repeats, ignore_index=True)
-            sampled_df = sampled_df.sample(n=min_samples, random_state=42)
-        balanced_dfs.append(sampled_df)
-    
-    # Dengeli veri setini oluştur
-    balanced_df = pd.concat(balanced_dfs, axis=0, ignore_index=True)
-    balanced_df = balanced_df.sample(frac=1, random_state=42).reset_index(drop=True)
-    
-    print(f"\n📊 Dengeli veri seti boyutu: {len(balanced_df)}")
-    print("📊 Dengeli sınıf dağılımı:")
-    balanced_distribution = balanced_df['label'].value_counts()
-    for label, count in balanced_distribution.items():
-        print(f"  • {label}: {count} ({count/len(balanced_df)*100:.1f}%)")
-    
-    # Özellikleri ve etiketleri ayır
-    X = balanced_df.drop('label', axis=1)
-    y = balanced_df['label']
-    
-    # NaN ve sonsuz değerleri temizle
-    X = X.replace([np.inf, -np.inf], np.nan)
-    X = X.fillna(X.mean())
-    
-    # Verileri normalize et (RobustScaler kullan)
-    scaler = RobustScaler()
-    X_scaled = scaler.fit_transform(X)
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
-    # Split
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X_scaled, y_encoded, test_size=0.4, random_state=42, stratify=y_encoded)
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)
-    
-    print(f"\n✅ Veri bölümleme tamamlandı (60/20/20):")
-    print(f"  • Eğitim seti: {X_train.shape[0]} örnek")
-    print(f"  • Doğrulama seti: {X_val.shape[0]} örnek")
-    print(f"  • Test seti: {X_test.shape[0]} örnek")
-
-    # AE eğitim
-    input_dim = X_train.shape[1]
-    autoencoder, encoder = build_autoencoder(input_dim, encoding_dim=encoding_dim)
-    autoencoder.fit(X_train, X_train,
-                epochs=ae_epochs,
-                batch_size=ae_batch_size,
-                shuffle=True,
-                validation_data=(X_val, X_val),
-                verbose=1)
+        return np.where(labels_19 == 'Benign', 'Benign', 'Attack')
+    if class_config == 6:
+        return np.array([ATTACK_CATEGORIES_6[label] for label in labels_19], dtype=object)
+    return labels_19
 
 
-    # Sonra sadece eğitim setinde SMOTE kullan
-    print("\n🔄 SMOTE ile eğitim setini dengeliyor...")
-    sm = SMOTE(random_state=42)
-    X_train_resampled, y_train_resampled = sm.fit_resample(X_train, y_train)
-    print(f"  • SMOTE sonrası eğitim seti: {X_train_resampled.shape[0]} örnek")
+def load_split(data_dir, split):
+    """data/<split> altındaki tüm CSV'leri okur. İlk okumadan sonra data/cache altına yazar;
+    CSV'ler değişirse data/cache klasörünü silin."""
+    cache_path = os.path.join(data_dir, 'cache', f'{split}.pkl')
+    if os.path.exists(cache_path):
+        print(f"  ✓ {split} önbellekten okundu: {cache_path}")
+        return pd.read_pickle(cache_path)
 
-    # Sadece SMOTE edilmiş eğitim setini encode et!
-    X_train_encoded = encoder.predict(X_train_resampled)
-    X_val_encoded = encoder.predict(X_val)
-    X_test_encoded = encoder.predict(X_test)
+    folder = os.path.join(data_dir, split)
+    dfs = []
+    for fn in sorted(os.listdir(folder)):
+        if fn.endswith('.csv'):
+            df = pd.read_csv(os.path.join(folder, fn))
+            df = df.replace([np.inf, -np.inf], np.nan).astype(np.float32)
+            df['label'] = get_attack_category(fn)
+            dfs.append(df)
+            print(f"  ✓ {fn}: {len(df)} kayıt")
+    data = pd.concat(dfs, ignore_index=True)
+    data['label'] = data['label'].astype('category')
 
-    # One-hot encode etiketler
-    num_classes = len(label_encoder.classes_)
-    y_train_categorical = to_categorical(y_train_resampled, num_classes)
-    y_val_categorical = to_categorical(y_val, num_classes)
-    y_test_categorical = to_categorical(y_test, num_classes)
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    data.to_pickle(cache_path)
+    return data
 
-    return X_train_encoded, X_val_encoded, X_test_encoded, y_train_categorical, y_val_categorical, y_test_categorical, label_encoder
+
+def cap_per_class(X, y, max_per_class, seed=42):
+    """Her sınıftan en fazla max_per_class örneği rastgele bırakır."""
+    rng = np.random.RandomState(seed)
+    keep = []
+    for c in np.unique(y):
+        idx = np.where(y == c)[0]
+        if len(idx) > max_per_class:
+            idx = rng.choice(idx, max_per_class, replace=False)
+        keep.append(idx)
+    keep = rng.permutation(np.concatenate(keep))
+    return X[keep], y[keep]
+
+
+def signed_log1p(X):
+    # Rate, Header_Length, IAT gibi çok çarpık özellikleri sıkıştırır
+    return np.sign(X) * np.log1p(np.abs(X))
+
+
+def build_scaler(scaling):
+    if scaling == 'log':
+        return make_pipeline(FunctionTransformer(signed_log1p), StandardScaler())
+    if scaling == 'quantile':
+        return QuantileTransformer(n_quantiles=1000, output_distribution='normal', subsample=200000, random_state=42)
+    return MinMaxScaler()
+
+
+def print_distribution(title, y, classes):
+    counts = np.bincount(y, minlength=len(classes))
+    print(f"\n📊 {title}:")
+    for name, count in zip(classes, counts):
+        print(f"  • {name}: {count}")
+
+
+def load_and_preprocess_data(
+    data_dir,
+    class_config=2,
+    max_per_class=50000,
+    balance='weights',
+    scaling='log',
+    drop_features=(),
+    val_size=0.15,
+    seed=42
+):
+    # 1) Oku ve etiketle
+    print("📁 Eğitim verisi okunuyor...")
+    train = load_split(data_dir, 'train')
+    print("📁 Test verisi okunuyor (resmi test seti)...")
+    test = load_split(data_dir, 'test')
+
+    features = [c for c in train.columns if c != 'label' and c not in drop_features]
+    if drop_features:
+        print(f"  • Çıkarılan özellikler: {list(drop_features)}")
+
+    # 2) Eğitimdeki birebir tekrarları at (dosyalar arası dahil); test resmi haliyle kalır
+    before = len(train)
+    train = train.drop_duplicates(ignore_index=True)
+    print(f"  • Eğitimde tekrar eden {before - len(train)} satır atıldı, kalan {len(train)}")
+
+    X = train[features].fillna(0).values
+    y = map_labels(train['label'], class_config)
+    X_test = test[features].fillna(0).values
+    y_test = map_labels(test['label'], class_config)
+    del train, test
+
+    # 3) Doğrulama setini eğitimden ayır; resmi test setine sadece en sonda dokunulur
+    X_train, X_val, y_train, y_val = train_test_split(
+        X, y, test_size=val_size, random_state=seed, stratify=y)
+    del X, y
+
+    # 4) Büyük sınıfları sınırla (doğrulamada aynı oranda)
+    X_train, y_train = cap_per_class(X_train, y_train, max_per_class, seed)
+    X_val, y_val = cap_per_class(X_val, y_val, int(max_per_class * val_size / (1 - val_size)), seed)
+
+    # 5) Ölçekleme: istatistikler sadece eğitim setinden öğrenilir
+    scaler = build_scaler(scaling)
+    X_train = scaler.fit_transform(X_train).astype(np.float32)
+    X_val = scaler.transform(X_val).astype(np.float32)
+    X_test = scaler.transform(X_test).astype(np.float32)
+
+    # 6) Etiketleri sayıya çevir
+    le = LabelEncoder().fit(y_train)
+    y_train, y_val, y_test = le.transform(y_train), le.transform(y_val), le.transform(y_test)
+    classes = list(le.classes_)
+    print_distribution("Eğitim seti", y_train, classes)
+
+    # 7) Sınıf dengesizliği: SMOTE (azınlıkları max_per_class'a tamamlar) veya sınıf ağırlıkları
+    class_weights = None
+    if balance == 'smote':
+        counts = np.bincount(y_train)
+        strategy = {i: max_per_class for i, c in enumerate(counts) if c < max_per_class}
+        if strategy:
+            X_train, y_train = SMOTE(sampling_strategy=strategy, random_state=seed).fit_resample(X_train, y_train)
+            print_distribution("SMOTE sonrası eğitim seti", y_train, classes)
+    elif balance == 'weights':
+        counts = np.bincount(y_train)
+        class_weights = {i: float(np.sqrt(counts.max() / c)) for i, c in enumerate(counts)}
+
+    print(f"\n✅ Eğitim {len(y_train)} | Doğrulama {len(y_val)} | Test {len(y_test)} örnek")
+
+    return {
+        'X_train': X_train, 'y_train': y_train,
+        'X_val': X_val, 'y_val': y_val,
+        'X_test': X_test, 'y_test': y_test,
+        'label_encoder': le,
+        'scaler': scaler,
+        'features': features,
+        'class_weights': class_weights,
+    }

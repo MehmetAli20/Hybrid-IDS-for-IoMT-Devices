@@ -5,8 +5,14 @@ __pycache__/
 .venv/
 venv/
 
-# Dataset (large CSVs — see README_DATA.md)
+# Dataset and cache (large CSVs — see README_DATA.md)
 data/
+
+# Training outputs (models, plots, metrics)
+outputs/
+
+# Local backup
+_yedek_yerel_*/
 
 # OS / editor
 .DS_Store
