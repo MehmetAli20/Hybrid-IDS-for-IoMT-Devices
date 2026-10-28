@@ -104,15 +104,23 @@ def load_split(data_dir, split):
     return data
 
 
-def cap_per_class(X, y, max_per_class, seed=42):
-    """Her sınıftan en fazla max_per_class örneği rastgele bırakır."""
+def cap_per_class(X, y, subtypes, max_per_class, seed=42):
+    """Her sınıftan en fazla max_per_class örnek bırakır. Bütçe, sınıfın alt türleri (19 sınıflı etiketler) arasında
+    olabildiğince eşit paylaştırılır: az satırlı alt türlerin hepsi alınır, kalan bütçe diğerlerine dağıtılır.
+    Böylece 2 ve 6 sınıfta Ping Sweep, VulScan gibi nadir saldırılar flood'ların içinde kaybolmaz.
+    19 sınıfta her sınıfın tek alt türü olduğu için sonuç düz rastgele sınırlamayla aynıdır."""
     rng = np.random.RandomState(seed)
     keep = []
     for c in np.unique(y):
-        idx = np.where(y == c)[0]
-        if len(idx) > max_per_class:
-            idx = rng.choice(idx, max_per_class, replace=False)
-        keep.append(idx)
+        in_class = y == c
+        groups = sorted((np.where(in_class & (subtypes == s))[0] for s in np.unique(subtypes[in_class])), key=len)
+        budget = max_per_class
+        for i, idx in enumerate(groups):
+            quota = budget // (len(groups) - i)
+            if len(idx) > quota:
+                idx = rng.choice(idx, quota, replace=False)
+            keep.append(idx)
+            budget -= len(idx)
     keep = rng.permutation(np.concatenate(keep))
     return X[keep], y[keep]
 
@@ -164,18 +172,21 @@ def load_and_preprocess_data(
 
     X = train[features].fillna(0).values
     y = map_labels(train['label'], class_config)
+    subtypes = train['label'].astype(str).values
     X_test = test[features].fillna(0).values
     y_test = map_labels(test['label'], class_config)
+    test_subtypes = test['label'].astype(str).values
+    file_counts = pd.Series(y).value_counts()
     del train, test
 
-    # 3) Doğrulama setini eğitimden ayır; resmi test setine sadece en sonda dokunulur
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=val_size, random_state=seed, stratify=y)
-    del X, y
+    # 3) Doğrulama setini eğitimden ayır (19 alt türe göre tabakalı); resmi test setine sadece en sonda dokunulur
+    X_train, X_val, y_train, y_val, sub_train, sub_val = train_test_split(
+        X, y, subtypes, test_size=val_size, random_state=seed, stratify=subtypes)
+    del X, y, subtypes
 
-    # 4) Büyük sınıfları sınırla (doğrulamada aynı oranda)
-    X_train, y_train = cap_per_class(X_train, y_train, max_per_class, seed)
-    X_val, y_val = cap_per_class(X_val, y_val, int(max_per_class * val_size / (1 - val_size)), seed)
+    # 4) Büyük sınıfları alt türlerine eşit paylaştırarak sınırla (doğrulamada aynı oranda)
+    X_train, y_train = cap_per_class(X_train, y_train, sub_train, max_per_class, seed)
+    X_val, y_val = cap_per_class(X_val, y_val, sub_val, int(max_per_class * val_size / (1 - val_size)), seed)
 
     # 5) Ölçekleme: istatistikler sadece eğitim setinden öğrenilir
     scaler = build_scaler(scaling)
@@ -201,6 +212,13 @@ def load_and_preprocess_data(
         counts = np.bincount(y_train)
         class_weights = {i: float(np.sqrt(counts.max() / c)) for i, c in enumerate(counts)}
 
+    # Grafik için sınıf sayıları: tekrarsız eğitim dosyaları, eğitimde kullanılan (sınır/denge sonrası) ve test
+    class_counts = {
+        'Eğitim dosyaları (tekrarsız)': [int(file_counts[c]) for c in classes],
+        'Eğitimde kullanılan': np.bincount(y_train, minlength=len(classes)).tolist(),
+        'Test': np.bincount(y_test, minlength=len(classes)).tolist(),
+    }
+
     print(f"\n✅ Eğitim {len(y_train)} | Doğrulama {len(y_val)} | Test {len(y_test)} örnek")
 
     return {
@@ -211,4 +229,6 @@ def load_and_preprocess_data(
         'scaler': scaler,
         'features': features,
         'class_weights': class_weights,
+        'class_counts': class_counts,
+        'test_subtypes': test_subtypes,
     }

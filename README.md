@@ -8,7 +8,7 @@ Developed as my Computer Engineering **senior thesis project** at Karadeniz Tech
 
 - Evaluated on the dataset's **official test files** (1.6 million traffic windows), which are never used for training or model selection.
 - Found a **shortcut feature**: `IAT` follows the recording time of each capture rather than the traffic itself. A Random Forest using `IAT` alone reaches 99.4% accuracy on 6 classes, so `IAT` is excluded by default. Details: [IAT_SHORTCUT.md](IAT_SHORTCUT.md).
-- Without the shortcut: **99.6% accuracy** for attack vs. benign, and **99.5% (6 classes) / 99.2% (19 classes)** at attack-type level. Only DoS vs. DDoS stays unreliable (63–70%), because the per-window features don't describe how many hosts send the traffic; it is reported separately.
+- Without the shortcut: **99.8% accuracy** for attack vs. benign, and **99.5% (6 classes) / 99.2% (19 classes)** at attack-type level. Only DoS vs. DDoS stays unreliable (66–70%), because the per-window features don't describe how many hosts send the traffic; it is reported separately.
 - Includes a Random Forest baseline on the same pipeline, a reproducible IAT analysis and a prediction script.
 
 ## Why IoMT Security?
@@ -29,7 +29,7 @@ CSV traffic windows (CIC IoMT 2024, 45 features)
 Drop IAT · remove duplicate training rows · NaN/Inf → 0
         │
         ▼
-Stratified 85/15 train/validation split of the training files · max 50,000 rows per class
+Stratified 85/15 train/validation split · max 50,000 rows per class, shared evenly across its attack subtypes
         │
         ▼
 Signed log1p + standardization (fit on training rows only)
@@ -86,40 +86,50 @@ The model still predicts DoS and DDoS separately. The **DoS vs. DDoS** column sh
 
 | Classes | Model | Attack type<br>accuracy / macro-F1 | Exact class<br>accuracy / macro-F1 | DoS vs. DDoS |
 |---|---|---|---|---|
-| 2 | AE + BiLSTM + Attention | 0.9963 / 0.9618 | 0.9963 / 0.9618 | – |
-| 2 | Random Forest | 0.9963 / 0.9618 | 0.9963 / 0.9618 | – |
-| 6 | AE + BiLSTM + Attention | 0.9949 / 0.8515 | 0.6586 / 0.7483 | 0.634 |
-| 6 | Random Forest | 0.9956 / 0.8635 | 0.6536 / 0.7547 | 0.628 |
+| 2 | AE + BiLSTM + Attention | 0.9981 / 0.9793 | 0.9981 / 0.9793 | – |
+| 2 | Random Forest | 0.9971 / 0.9684 | 0.9971 / 0.9684 | – |
+| 6 | AE + BiLSTM + Attention | 0.9950 / 0.8594 | 0.7067 / 0.7681 | 0.686 |
+| 6 | Random Forest | 0.9957 / 0.8636 | 0.6830 / 0.7627 | 0.659 |
 | 19 | AE + BiLSTM + Attention | 0.9919 / 0.7881 | 0.7049 / 0.6653 | 0.700 |
 | 19 | Random Forest | 0.9939 / 0.8104 | 0.6742 / 0.6602 | 0.666 |
 
 - **Why two levels:** the features describe packet rates, flags and sizes within a window, not how many hosts send the traffic, so DoS vs. DDoS stays close to a guess. On the 6-class test set, answering "DDoS" for every flood would be right 72% of the time, more than either model. Counting this in the main accuracy would hide how well the attack types themselves are detected; reporting it separately keeps the limitation visible.
-- **Attack vs. benign:** both models get exactly the same number of test windows right, with different errors: the deep model misses 6,026 attacks and raises 27 false alarms, the Random Forest misses 6,051 and raises 2. 97.7% of the test windows are attacks, so macro-F1 is the more telling number.
-- **Attack types:** with 6 classes, floods (F1 ≈ 1.00), MQTT (0.99), Benign (0.91–0.93) and Recon (0.91–0.94) are recognized well. **Spoofing** is the weakest type (F1 0.44–0.46); most of its false alarms are benign windows. With 19 classes, the Recon subtypes (OS scan vs. port scan, vulnerability scan) and Spoofing pull macro-F1 down while accuracy stays above 99%.
+- **Attack vs. benign:** the deep model misses 2,782 of 1.58 million attack windows and raises 354 false alarms (0.9% of benign windows); the Random Forest misses 2,378 and raises 2,278 (6.1%). Each class's training budget is shared evenly across its attack subtypes: with plain random capping the attack sample held only a few dozen VulScan and Ping Sweep rows, and the binary model missed almost every Ping Sweep and Spoofing window. `detection_by_attack_type.png` shows the rate per subtype; the weakest are VulScan (57%), Ping Sweep (76%) and Spoofing (77%). 97.7% of the test windows are attacks, so macro-F1 is the more telling number.
+- **Attack types:** with 6 classes, floods (F1 ≈ 1.00), MQTT (0.99), Benign (0.92–0.93) and Recon (0.92–0.94) are recognized well. **Spoofing** is the weakest type (F1 0.46–0.47); most of its false alarms are benign windows. With 19 classes, the Recon subtypes (OS scan vs. port scan, vulnerability scan) and Spoofing pull macro-F1 down while accuracy stays above 99%.
 - **With `IAT`** (and quantile scaling for the deep model), exact 6-class accuracy jumps to 99.5–99.8% because `IAT` separates DoS from DDoS by recording time. [IAT_SHORTCUT.md](IAT_SHORTCUT.md) explains why that number is not used.
 
 ### Run outputs
 
-Every run writes its artifacts to `outputs/<run_name>/`:
+Every `main.py` run writes its artifacts to `outputs/<run_name>/`. The training plots and `training_log.csv` are refreshed after every epoch, so a run can be watched while it trains.
 
-- `config.json` — all arguments of the run
-- `test_metrics.json`, `test_report.txt` — accuracy, macro / weighted F1 and per-class precision, recall and F1
-- `confusion_matrix.csv`, `confusion_matrix.png` — counts and the row-normalized matrix
-- `confusion_matrix_attack_type.csv`, `confusion_matrix_attack_type.png` — the same at attack-type level (6 and 19 classes); `test_metrics.json` also stores the attack-type accuracy, macro-F1 and DoS vs. DDoS accuracy
-- `roc_pr_curves.png` — one-vs-rest ROC and precision-recall curves
-- `training_history.png` — loss, accuracy and validation macro-F1 per epoch
-- `model.h5`, `best_weights.h5`, `preprocess.joblib` — the trained model with its scaler and label encoder (used by `predict.py`)
+| When | File | What it shows |
+|---|---|---|
+| Before training | `config.json` | all arguments of the run |
+| | `class_distribution.png` / `.csv` | rows per class in the training files, in the training set actually used, and in the test set |
+| | `autoencoder_history.png` | autoencoder reconstruction loss per epoch |
+| Every epoch | `training_history.png` | loss and accuracy (training vs. validation), validation macro-F1 with the best epoch, learning rate |
+| | `val_f1_per_class.png` | validation F1 of every class over the epochs |
+| | `training_log.csv` | the same numbers as a table |
+| After testing | `test_metrics.json`, `test_report.txt` | accuracy, macro / weighted F1, per-class precision, recall and F1, attack-type metrics |
+| | `confusion_matrix.csv` / `.png`, `confusion_matrix_attack_type.csv` / `.png` | counts and the row-normalized matrix, at exact-class and attack-type level |
+| | `per_class_metrics.png` | precision, recall and F1 per class, plus F1 per attack type |
+| | `detection_by_attack_type.png` / `.csv` | share of each of the 18 attack subtypes flagged as an attack, and the false-alarm rate on benign traffic — shows blind spots that overall accuracy hides |
+| | `confidence_histogram.png` | how confident the model is on correct vs. wrong predictions |
+| | `roc_pr_curves.png` | one-vs-rest ROC and precision-recall curves (one small panel per class above 8 classes) |
+| | `model.h5`, `best_weights.h5`, `preprocess.joblib` | the trained model with its scaler and label encoder (used by `predict.py`) |
+
+`baseline.py` writes the same evaluation files plus `class_distribution.png` and `feature_importances.json` / `.png`; `iat_analysis.py` adds `iat_by_class.csv` / `.png`.
 
 ## Project Structure
 
 ```
 ├── src/
 │   ├── data_loader.py   # loading, caching, dedup, train/val split, scaling, class weights / SMOTE
-│   ├── model.py         # autoencoder, BiLSTM + attention model, training with macro-F1 checkpointing
+│   ├── model.py         # autoencoder, BiLSTM + attention model, training with macro-F1 checkpointing and live plots
 │   ├── main.py          # CLI: train + evaluate the deep model
 │   ├── baseline.py      # CLI: Random Forest on the same pipeline
 │   ├── iat_analysis.py  # CLI: IAT shortcut analysis
-│   ├── evaluation.py    # metrics (exact and attack-type level), reports, confusion matrices, ROC / PR curves
+│   ├── evaluation.py    # metrics (exact and attack-type level), reports and all plots
 │   └── predict.py       # CLI: predict a new CSV with a trained run
 ├── data/                # CIC IoMT 2024 CSVs + cache (not committed — see README_DATA.md)
 ├── outputs/             # one folder per run (not committed)

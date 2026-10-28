@@ -5,7 +5,7 @@ import argparse
 from sklearn.ensemble import RandomForestClassifier
 
 from data_loader import load_split, load_and_preprocess_data
-from evaluation import evaluate_predictions
+from evaluation import evaluate_predictions, plot_feature_importances, plot_iat_by_class
 
 
 def iat_by_class(data_dir):
@@ -47,6 +47,7 @@ if __name__ == "__main__":
     print("⏱️ Sınıf bazında IAT dağılımı hesaplanıyor...")
     table = iat_by_class(data_dir)
     table.to_csv(os.path.join(run_dir, 'iat_by_class.csv'), float_format='%.1f')
+    plot_iat_by_class(table, os.path.join(run_dir, 'iat_by_class.png'))
     print(table.to_string(float_format=lambda v: f"{v:,.0f}"))
 
     # Üç deney aynı satırları kullanır, sadece sütunlar değişir; ağaç modelleri ölçeklemeden etkilenmez
@@ -70,11 +71,12 @@ if __name__ == "__main__":
 
         variant_dir = os.path.join(run_dir, name)
         os.makedirs(variant_dir, exist_ok=True)
-        metrics = evaluate_predictions(data['y_test'], proba, classes, variant_dir)
+        metrics = evaluate_predictions(data['y_test'], proba, classes, variant_dir, data['test_subtypes'])
         summary[name] = {'n_features': len(cols), 'accuracy': metrics['accuracy'], 'macro_f1': metrics['macro_f1']}
         if name == 'all_features':
             ranked = sorted(zip(features, rf.feature_importances_), key=lambda x: -x[1])
             summary[name]['top_features'] = [(f, float(v)) for f, v in ranked[:5]]
+            plot_feature_importances(ranked, os.path.join(variant_dir, 'feature_importances.png'))
 
     with open(os.path.join(run_dir, 'summary.json'), 'w') as f:
         json.dump(summary, f, indent=2)

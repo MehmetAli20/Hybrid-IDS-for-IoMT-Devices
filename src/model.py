@@ -1,10 +1,13 @@
 import os
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, models
 from tensorflow.keras.regularizers import l2
 from sklearn.metrics import f1_score
+
+from evaluation import plot_training_curves
 
 
 def build_autoencoder(input_dim, encoding_dim=32):
@@ -45,7 +48,7 @@ def build_autoencoder(input_dim, encoding_dim=32):
 def train_autoencoder(X_train, X_val, encoding_dim=32, epochs=30, batch_size=256):
     print(f"\n🧩 Autoencoder eğitiliyor: {X_train.shape[1]} -> {encoding_dim} boyut")
     autoencoder, encoder = build_autoencoder(X_train.shape[1], encoding_dim)
-    autoencoder.fit(
+    history = autoencoder.fit(
         X_train, X_train,
         validation_data=(X_val, X_val),
         epochs=epochs,
@@ -56,7 +59,7 @@ def train_autoencoder(X_train, X_val, encoding_dim=32, epochs=30, batch_size=256
         ],
         verbose=2
     )
-    return encoder
+    return encoder, history.history
 
 
 def create_lstm_attention_model(input_dim, num_classes, encoder=None, reshape_dim=8, num_heads=4):
@@ -113,26 +116,48 @@ def create_lstm_attention_model(input_dim, num_classes, encoder=None, reshape_di
     return model
 
 
-class MacroF1Callback(keras.callbacks.Callback):
-    """Her epoch sonunda doğrulama setinde macro-F1 hesaplar; erken durdurma ve checkpoint bunu izler."""
+class ValidationMonitor(keras.callbacks.Callback):
+    """Her epoch sonunda doğrulama setinde macro-F1'i ve sınıf başına F1'i hesaplar; erken durdurma ve checkpoint
+    val_macro_f1'i izler. training_log.csv ve eğitim grafikleri her epoch'ta yenilenir, böylece eğitim sürerken
+    run klasöründen izlenebilir."""
 
-    def __init__(self, X_val, y_val):
+    def __init__(self, X_val, y_val, classes, run_dir):
         super().__init__()
         self.X_val = X_val
         self.y_val = y_val
+        self.classes = classes
+        self.run_dir = run_dir
+        self.rows = []
 
     def on_epoch_end(self, epoch, logs=None):
         y_pred = self.model.predict(self.X_val, batch_size=4096, verbose=0).argmax(axis=1)
-        logs['val_macro_f1'] = f1_score(self.y_val, y_pred, average='macro', zero_division=0)
+        f1 = f1_score(self.y_val, y_pred, labels=list(range(len(self.classes))), average=None, zero_division=0)
+        logs['val_macro_f1'] = float(f1.mean())
         print(f"  val_macro_f1: {logs['val_macro_f1']:.4f}")
 
+        # Öğrenme oranı, ReduceLROnPlateau bu epoch'un sonunda değiştirmeden önce okunur
+        row = {'epoch': epoch + 1, 'lr': float(keras.backend.get_value(self.model.optimizer.learning_rate))}
+        row.update({k: float(logs[k]) for k in ('loss', 'accuracy', 'val_loss', 'val_accuracy', 'val_macro_f1')})
+        row.update({f'val_f1_{name}': float(v) for name, v in zip(self.classes, f1)})
+        self.rows.append(row)
 
-def train_model(model, X_train, y_train, X_val, y_val, run_dir, epochs=50, batch_size=512, class_weights=None):
+        log = pd.DataFrame(self.rows)
+        log.to_csv(os.path.join(self.run_dir, 'training_log.csv'), index=False)
+        plot_training_curves(log, self.classes, self.run_dir)
+
+
+def train_model(model, X_train, y_train, X_val, y_val, run_dir, classes, epochs=50, batch_size=512,
+                class_weights=None):
     print(f"\n🚀 Eğitim başlatılıyor: {len(X_train)} örnek, batch_size={batch_size}")
+    # Çok kısa eğitimde BatchNorm'un hareketli ortalamaları oturmaz; model tahmin modunda tek sınıfa çökebilir
+    steps = int(np.ceil(len(X_train) / batch_size)) * epochs
+    if steps < 300:
+        print(f"⚠️ Toplam {steps} eğitim adımı çok az: BatchNorm istatistikleri oturmadan model tahmin modunda "
+              f"tek sınıfa çökebilir. En az ~300 adım önerilir (daha fazla epoch ya da veri).")
 
     best_weights = os.path.join(run_dir, 'best_weights.h5')
     callbacks = [
-        MacroF1Callback(X_val, y_val),
+        ValidationMonitor(X_val, y_val, classes, run_dir),
         keras.callbacks.EarlyStopping(
             monitor='val_macro_f1',
             mode='max',

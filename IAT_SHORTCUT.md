@@ -30,7 +30,7 @@ Median `IAT` per flood class, sorted by train median:
 - The four TCP/IP DoS attacks and the four DDoS attacks appear in the same order (TCP → SYN → UDP → ICMP), with DDoS about 20,000 units later. This matches a recording schedule, not how the attacks behave.
 - Benign, Recon, Spoofing and MQTT-Malformed do not form a single band; their values are mostly 0 or near 84.7 or 169 million.
 
-`src/iat_analysis.py` writes the full table for all 19 classes, with 5th and 95th percentiles, to `iat_by_class.csv`.
+`src/iat_analysis.py` writes the full table for all 19 classes, with 5th and 95th percentiles, to `iat_by_class.csv` and plots the flood classes in `iat_by_class.png`.
 
 ## 2. One column is almost enough
 
@@ -38,17 +38,17 @@ Random Forest (100 trees, at most 50,000 training rows per class), accuracy / ma
 
 | Classes | All 45 features | `IAT` only | All except `IAT` |
 |---|---|---|---|
-| 2 | 0.9980 / 0.9787 | 0.9903 / 0.9112 | 0.9963 / 0.9618 |
-| 6 | 0.9975 / 0.9215 | 0.9941 / 0.8705 | 0.6536 / 0.7547 |
+| 2 | 0.9987 / 0.9859 | 0.9906 / 0.9102 | 0.9971 / 0.9684 |
+| 6 | 0.9977 / 0.9341 | 0.9939 / 0.8701 | 0.6830 / 0.7627 |
 | 19 | 0.9938 / 0.8952 | 0.8324 / 0.7018 | 0.6742 / 0.6602 |
 
-- In the 6- and 19-class forests, `IAT` has the largest feature importance (22% and 27%; the next feature has 8% and 6%). In the 19-class task, `IAT` alone beats the other 44 features together.
-- Without `IAT`, almost all 6-class errors are DoS ↔ DDoS: 40% of DDoS windows are predicted as DoS and 30% of DoS windows as DDoS. These two families differ mainly in the number of attacking hosts, which the per-window features do not describe. With `IAT`, the model separates them by recording time instead.
-- Attack vs. benign mostly holds up without `IAT`: macro-F1 goes from 0.979 to 0.962, and `IAT` is not among the top five features of the 2-class forest. 97.7% of the test rows are attacks, so macro-F1 is the more telling number here.
+- In the 6- and 19-class forests, `IAT` has the largest feature importance (23% and 27%; the next feature has 7% and 6%). In the 19-class task, `IAT` alone beats the other 44 features together.
+- Without `IAT`, almost all 6-class errors are DoS ↔ DDoS: 34% of DDoS windows are predicted as DoS and 33% of DoS windows as DDoS. These two families differ mainly in the number of attacking hosts, which the per-window features do not describe. With `IAT`, the model separates them by recording time instead.
+- Attack vs. benign mostly holds up without `IAT`: macro-F1 goes from 0.986 to 0.968, and `IAT` ranks only fourth in the 2-class forest (9% of the importance). 97.7% of the test rows are attacks, so macro-F1 is the more telling number here.
 
 ## 3. The deep model uses IAT only when the scaling exposes it
 
-Autoencoder + BiLSTM + Attention, 6 classes, accuracy / macro-F1:
+Autoencoder + BiLSTM + Attention, 6 classes, accuracy / macro-F1. These four runs predate the subtype-balanced sampling described in the README, so their numbers differ slightly from the README's main table; the comparison between the columns is what matters here.
 
 | Scaling | With `IAT` | Without `IAT` |
 |---|---|---|

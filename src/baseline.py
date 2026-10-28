@@ -5,7 +5,7 @@ import argparse
 from sklearn.ensemble import RandomForestClassifier
 
 from data_loader import load_and_preprocess_data
-from evaluation import evaluate_predictions
+from evaluation import evaluate_predictions, plot_class_distribution, plot_feature_importances
 
 
 if __name__ == "__main__":
@@ -37,13 +37,14 @@ if __name__ == "__main__":
         seed=args.seed
     )
     classes = list(data['label_encoder'].classes_)
+    plot_class_distribution(data['class_counts'], classes, os.path.join(run_dir, 'class_distribution.png'))
 
     print(f"\n🌲 Random Forest eğitiliyor ({args.n_estimators} ağaç)...")
     rf = RandomForestClassifier(n_estimators=args.n_estimators, n_jobs=-1, random_state=args.seed)
     rf.fit(data['X_train'], data['y_train'])
 
     proba = rf.predict_proba(data['X_test'])
-    evaluate_predictions(data['y_test'], proba, classes, run_dir)
+    evaluate_predictions(data['y_test'], proba, classes, run_dir, data['test_subtypes'])
 
     importances = sorted(zip(data['features'], rf.feature_importances_), key=lambda x: -x[1])
     print("\n🔎 En önemli 10 özellik:")
@@ -51,3 +52,4 @@ if __name__ == "__main__":
         print(f"  • {name}: {value:.4f}")
     with open(os.path.join(run_dir, 'feature_importances.json'), 'w') as f:
         json.dump({name: float(value) for name, value in importances}, f, indent=2)
+    plot_feature_importances(importances, os.path.join(run_dir, 'feature_importances.png'))

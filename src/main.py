@@ -7,7 +7,7 @@ import tensorflow as tf
 
 from data_loader import load_and_preprocess_data
 from model import train_autoencoder, create_lstm_attention_model, train_model
-from evaluation import evaluate_predictions, plot_history
+from evaluation import evaluate_predictions, plot_class_distribution, plot_autoencoder_history
 
 
 if __name__ == "__main__":
@@ -58,11 +58,13 @@ if __name__ == "__main__":
         seed=args.seed
     )
     classes = list(data['label_encoder'].classes_)
+    plot_class_distribution(data['class_counts'], classes, os.path.join(run_dir, 'class_distribution.png'))
 
     encoder = None
     if args.ae_mode != 'none':
-        encoder = train_autoencoder(data['X_train'], data['X_val'], encoding_dim=args.encoding_dim,
-                                    epochs=args.ae_epochs)
+        encoder, ae_history = train_autoencoder(data['X_train'], data['X_val'], encoding_dim=args.encoding_dim,
+                                                epochs=args.ae_epochs)
+        plot_autoencoder_history(ae_history, os.path.join(run_dir, 'autoencoder_history.png'))
         encoder.trainable = args.ae_mode == 'finetune'
 
     model = create_lstm_attention_model(
@@ -72,22 +74,23 @@ if __name__ == "__main__":
     )
     model.summary()
 
-    model, history = train_model(
+    # Eğitim grafikleri ve training_log.csv her epoch sonunda run klasöründe güncellenir
+    model, _ = train_model(
         model,
         data['X_train'],
         data['y_train'],
         data['X_val'],
         data['y_val'],
         run_dir,
+        classes,
         epochs=args.epochs,
         batch_size=args.batch_size,
         class_weights=data['class_weights']
     )
-    plot_history(history, os.path.join(run_dir, 'training_history.png'))
 
     print("\n🧪 Resmi test setinde değerlendirme yapılıyor...")
     proba = model.predict(data['X_test'], batch_size=4096, verbose=0)
-    evaluate_predictions(data['y_test'], proba, classes, run_dir)
+    evaluate_predictions(data['y_test'], proba, classes, run_dir, data['test_subtypes'])
 
     # Model ve ön işleme birlikte kaydedilir; predict.py ikisini birden kullanır
     model.save(os.path.join(run_dir, 'model.h5'))
