@@ -5,6 +5,8 @@ import pandas as pd
 import joblib
 from tensorflow import keras
 
+from data_loader import attack_type_groups
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Eğitilmiş modelle yeni bir CSV üzerinde tahmin")
@@ -20,7 +22,10 @@ if __name__ == "__main__":
     X = artifacts['scaler'].transform(X).astype(np.float32)
     proba = model.predict(X, batch_size=4096, verbose=0)
 
-    df['prediction'] = artifacts['label_encoder'].inverse_transform(proba.argmax(axis=1))
+    pred = proba.argmax(axis=1)
+    groups, member_of = attack_type_groups(list(artifacts['label_encoder'].classes_))
+    df['prediction'] = artifacts['label_encoder'].inverse_transform(pred)
+    df['attack_type'] = np.array(groups)[np.array(member_of)[pred]]
     df['confidence'] = proba.max(axis=1)
 
     # Tahminler veri klasörüne değil run klasörüne yazılır (data/ altındaki CSV'ler eğitimde okunuyor)

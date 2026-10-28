@@ -69,6 +69,16 @@ def map_labels(labels_19, class_config):
     return labels_19
 
 
+def attack_type_groups(classes):
+    """Aynı saldırının DoS ve DDoS sürümlerini tek saldırı türünde toplar (DoS-UDP + DDoS-UDP -> DoS/DDoS-UDP).
+    Pencere özellikleri saldırının kaç makineden geldiğini taşımadığı için bu ayrım ayrıca raporlanır.
+    Tür adlarını ve her sınıfın tür indeksini döndürür."""
+    keys = [c.replace('DDoS', 'DoS') for c in classes]
+    names = {k: (k.replace('DoS', 'DoS/DDoS') if keys.count(k) > 1 else k) for k in keys}
+    groups = list(dict.fromkeys(names[k] for k in keys))
+    return groups, [groups.index(names[k]) for k in keys]
+
+
 def load_split(data_dir, split):
     """data/<split> altındaki tüm CSV'leri okur. İlk okumadan sonra data/cache altına yazar;
     CSV'ler değişirse data/cache klasörünü silin."""

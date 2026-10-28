@@ -8,7 +8,7 @@ Developed as my Computer Engineering **senior thesis project** at Karadeniz Tech
 
 - Evaluated on the dataset's **official test files** (1.6 million traffic windows), which are never used for training or model selection.
 - Found a **shortcut feature**: `IAT` follows the recording time of each capture rather than the traffic itself. A Random Forest using `IAT` alone reaches 99.4% accuracy on 6 classes, so `IAT` is excluded by default. Details: [IAT_SHORTCUT.md](IAT_SHORTCUT.md).
-- Without the shortcut, attack vs. benign detection stays at **99.6% accuracy** (macro-F1 0.96); finer-grained classification is limited mainly by DoS vs. DDoS, which the per-window features cannot tell apart.
+- Without the shortcut: **99.6% accuracy** for attack vs. benign, and **99.5% (6 classes) / 99.2% (19 classes)** at attack-type level. Only DoS vs. DDoS stays unreliable (63–70%), because the per-window features don't describe how many hosts send the traffic; it is reported separately.
 - Includes a Random Forest baseline on the same pipeline, a reproducible IAT analysis and a prediction script.
 
 ## Why IoMT Security?
@@ -77,18 +77,26 @@ The pipeline supports three granularities via `--class_config`:
 
 ## Results
 
-Official test files (1,614,182 windows), `IAT` excluded:
+Official test files (1,614,182 windows), `IAT` excluded. Results are reported on two levels:
 
-| Classes | AE + BiLSTM + Attention<br>accuracy / macro-F1 | Random Forest<br>accuracy / macro-F1 |
-|---|---|---|
-| 2 | 0.9963 / 0.9618 | 0.9963 / 0.9618 |
-| 6 | 0.6586 / 0.7483 | 0.6536 / 0.7547 |
-| 19 | 0.7049 / 0.6653 | 0.6742 / 0.6602 |
+- **Attack type** (main result): the DoS and DDoS versions of the same attack count as one type. 6 classes become 5 types (Benign, DoS/DDoS, MQTT, Recon, Spoofing) and 19 classes become 13.
+- **Exact class**: every class separately, so mixing up DoS and DDoS counts as an error.
 
-- **Attack vs. benign** is reliable without `IAT`. Both models get exactly the same number of test windows right, with different errors: the deep model misses 6,026 attacks and raises 27 false alarms, the Random Forest misses 6,051 and raises 2. 97.7% of the test windows are attacks, so macro-F1 is the more telling number.
-- **6 classes:** MQTT (F1 0.99), Recon (0.91) and Benign (0.91) are recognized well. Most errors are between **DoS and DDoS**: the features describe packet rates, flags and sizes within a window, not how many hosts send the traffic. If the two are counted as one class, accuracy rises to about 99.5%. **Spoofing** is the weakest class (F1 0.44); most of its false alarms are benign windows.
-- **19 classes:** the same pattern at a finer level — almost all errors are between the DoS and DDoS version of the same protocol (for example DDoS-UDP vs. DoS-UDP).
-- **With `IAT`** (and quantile scaling for the deep model), 6-class accuracy jumps to 99.5–99.8%. [IAT_SHORTCUT.md](IAT_SHORTCUT.md) explains why that number is not used.
+The model still predicts DoS and DDoS separately. The **DoS vs. DDoS** column shows how often it picks the right one among windows whose attack type is already correct.
+
+| Classes | Model | Attack type<br>accuracy / macro-F1 | Exact class<br>accuracy / macro-F1 | DoS vs. DDoS |
+|---|---|---|---|---|
+| 2 | AE + BiLSTM + Attention | 0.9963 / 0.9618 | 0.9963 / 0.9618 | – |
+| 2 | Random Forest | 0.9963 / 0.9618 | 0.9963 / 0.9618 | – |
+| 6 | AE + BiLSTM + Attention | 0.9949 / 0.8515 | 0.6586 / 0.7483 | 0.634 |
+| 6 | Random Forest | 0.9956 / 0.8635 | 0.6536 / 0.7547 | 0.628 |
+| 19 | AE + BiLSTM + Attention | 0.9919 / 0.7881 | 0.7049 / 0.6653 | 0.700 |
+| 19 | Random Forest | 0.9939 / 0.8104 | 0.6742 / 0.6602 | 0.666 |
+
+- **Why two levels:** the features describe packet rates, flags and sizes within a window, not how many hosts send the traffic, so DoS vs. DDoS stays close to a guess. On the 6-class test set, answering "DDoS" for every flood would be right 72% of the time, more than either model. Counting this in the main accuracy would hide how well the attack types themselves are detected; reporting it separately keeps the limitation visible.
+- **Attack vs. benign:** both models get exactly the same number of test windows right, with different errors: the deep model misses 6,026 attacks and raises 27 false alarms, the Random Forest misses 6,051 and raises 2. 97.7% of the test windows are attacks, so macro-F1 is the more telling number.
+- **Attack types:** with 6 classes, floods (F1 ≈ 1.00), MQTT (0.99), Benign (0.91–0.93) and Recon (0.91–0.94) are recognized well. **Spoofing** is the weakest type (F1 0.44–0.46); most of its false alarms are benign windows. With 19 classes, the Recon subtypes (OS scan vs. port scan, vulnerability scan) and Spoofing pull macro-F1 down while accuracy stays above 99%.
+- **With `IAT`** (and quantile scaling for the deep model), exact 6-class accuracy jumps to 99.5–99.8% because `IAT` separates DoS from DDoS by recording time. [IAT_SHORTCUT.md](IAT_SHORTCUT.md) explains why that number is not used.
 
 ### Run outputs
 
@@ -97,6 +105,7 @@ Every run writes its artifacts to `outputs/<run_name>/`:
 - `config.json` — all arguments of the run
 - `test_metrics.json`, `test_report.txt` — accuracy, macro / weighted F1 and per-class precision, recall and F1
 - `confusion_matrix.csv`, `confusion_matrix.png` — counts and the row-normalized matrix
+- `confusion_matrix_attack_type.csv`, `confusion_matrix_attack_type.png` — the same at attack-type level (6 and 19 classes); `test_metrics.json` also stores the attack-type accuracy, macro-F1 and DoS vs. DDoS accuracy
 - `roc_pr_curves.png` — one-vs-rest ROC and precision-recall curves
 - `training_history.png` — loss, accuracy and validation macro-F1 per epoch
 - `model.h5`, `best_weights.h5`, `preprocess.joblib` — the trained model with its scaler and label encoder (used by `predict.py`)
@@ -110,7 +119,7 @@ Every run writes its artifacts to `outputs/<run_name>/`:
 │   ├── main.py          # CLI: train + evaluate the deep model
 │   ├── baseline.py      # CLI: Random Forest on the same pipeline
 │   ├── iat_analysis.py  # CLI: IAT shortcut analysis
-│   ├── evaluation.py    # metrics, reports, confusion matrix, ROC / PR curves
+│   ├── evaluation.py    # metrics (exact and attack-type level), reports, confusion matrices, ROC / PR curves
 │   └── predict.py       # CLI: predict a new CSV with a trained run
 ├── data/                # CIC IoMT 2024 CSVs + cache (not committed — see README_DATA.md)
 ├── outputs/             # one folder per run (not committed)
@@ -139,7 +148,7 @@ python src/baseline.py --class_config 6
 # IAT shortcut analysis (Random Forest with all features / IAT only / without IAT)
 python src/iat_analysis.py --class_config 6
 
-# predict a new CSV with a trained run
+# predict a new CSV with a trained run (adds prediction, attack_type and confidence columns)
 python src/predict.py --run_dir outputs/<run_name> --csv path/to/file.csv
 ```
 

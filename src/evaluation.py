@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import (accuracy_score, f1_score, classification_report, confusion_matrix,
                              roc_curve, auc, precision_recall_curve, average_precision_score)
 
+from data_loader import attack_type_groups
+
 
 def _thin(x, y, n=2000):
     # Milyonlarca noktalı eğrileri çizmeden önce seyrelt
@@ -84,6 +86,34 @@ def plot_history(history, path):
     plt.close(fig)
 
 
+def attack_type_metrics(cm, classes):
+    """Karışıklık matrisini saldırı türü seviyesine indirger; DoS/DDoS çifti yoksa (2 sınıf) None döner."""
+    groups, member_of = attack_type_groups(classes)
+    paired = [g for g in range(len(groups)) if member_of.count(g) > 1]
+    if not paired:
+        return None
+
+    onehot = np.eye(len(groups), dtype=np.int64)[member_of]
+    cm_type = onehot.T @ cm @ onehot
+    tp = np.diag(cm_type).astype(float)
+    predicted, actual = cm_type.sum(axis=0), cm_type.sum(axis=1)
+    precision = np.divide(tp, predicted, out=np.zeros_like(tp), where=predicted > 0)
+    recall = np.divide(tp, actual, out=np.zeros_like(tp), where=actual > 0)
+    f1 = np.divide(2 * precision * recall, precision + recall, out=np.zeros_like(tp), where=precision + recall > 0)
+
+    # Türü doğru bilinen DoS/DDoS pencerelerinde DoS mu DDoS mu sorusunun isabeti
+    exact = sum(cm[i, i] for i, g in enumerate(member_of) if g in paired)
+    same_type = sum(cm_type[g, g] for g in paired)
+    return {
+        'groups': groups,
+        'accuracy': float(tp.sum() / cm_type.sum()),
+        'macro_f1': float(f1.mean()),
+        'per_type_f1': {name: float(v) for name, v in zip(groups, f1)},
+        'dos_vs_ddos_accuracy': float(exact / same_type) if same_type else 0.0,
+        'confusion_matrix': cm_type,
+    }
+
+
 def evaluate_predictions(y_true, proba, classes, run_dir):
     y_pred = proba.argmax(axis=1)
     labels = list(range(len(classes)))
@@ -104,7 +134,20 @@ def evaluate_predictions(y_true, proba, classes, run_dir):
     print("\nSınıf bazlı metrikler:")
     print(report)
 
-    metrics['per_class'] = classification_report(y_true, y_pred, labels=labels, target_names=classes,
+    # İki seviyeli değerlendirme: aynı saldırının DoS ve DDoS sürümü tek tür sayılır (2 sınıfta yok)
+    attack_type = attack_type_metrics(cm, classes)
+    if attack_type is not None:
+        print("🧭 Saldırı türü seviyesi (DoS ve DDoS sürümleri tek tür):")
+        print(f"Accuracy:    {attack_type['accuracy']:.4f}")
+        print(f"Macro-F1:    {attack_type['macro_f1']:.4f}")
+        print(f"DoS/DDoS ayrımı (türü doğru bilinen pencerelerde): {attack_type['dos_vs_ddos_accuracy']:.4f}")
+        metrics['attack_type_level'] = {k: v for k, v in attack_type.items() if k != 'confusion_matrix'}
+        np.savetxt(os.path.join(run_dir, 'confusion_matrix_attack_type.csv'), attack_type['confusion_matrix'],
+                   fmt='%d', delimiter=',', header=','.join(attack_type['groups']), comments='')
+        plot_confusion_matrix(attack_type['confusion_matrix'], attack_type['groups'],
+                              os.path.join(run_dir, 'confusion_matrix_attack_type.png'))
+
+    metrics['per_class'] =classification_report(y_true, y_pred, labels=labels, target_names=classes,
                                                  output_dict=True, zero_division=0)
     with open(os.path.join(run_dir, 'test_metrics.json'), 'w', encoding='utf-8') as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
